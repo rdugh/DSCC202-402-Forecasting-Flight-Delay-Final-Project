@@ -30,7 +30,7 @@ dbutils.widgets.dropdown("00.Airport_Code", "JFK", ["JFK","SEA","BOS","ATL","LAX
 dbutils.widgets.text('01.training_start_date', "2018-01-01")
 dbutils.widgets.text('02.training_end_date', "2019-03-15")
 dbutils.widgets.text('03.inference_date', (dt.strptime(str(dbutils.widgets.get('02.training_end_date')), "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d"))
-dbutils.widgets.text('05.promote_model', "No")
+dbutils.widgets.text('04.promote_model', "No")
 
 training_start_date = str(dbutils.widgets.get('01.training_start_date'))
 training_end_date = str(dbutils.widgets.get('02.training_end_date'))
@@ -166,6 +166,7 @@ if prod_version is not None:
   # load the training data associated with the production model
   prod_model = mlflow.sklearn.load_model(f"models:/{model_name}/Production")
   pdf = spark.sql(f"""SELECT * from citibike.forecast_regression_timeweather WHERE station_id = '{station_id}' and model_version = '{prod_version}';""").toPandas()
+  
 if stage_version is not None:
   # load the training data assocaited with the staging model
   stage_model = mlflow.sklearn.load_model(f"models:/{model_name}/Staging")
