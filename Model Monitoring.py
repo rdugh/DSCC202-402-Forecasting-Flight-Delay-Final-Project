@@ -12,12 +12,31 @@
 
 # COMMAND ----------
 
-# grab the station information (system wide)
-stationDF=get_bike_stations()[['name','station_id','lat','lon']]
+databaseName = GROUP_DBNAME
 
-# grab the stations of interest
-stationsOfInterestDF = spark.sql("""select distinct(station_id) from from citibike.forecast_regression_timeweather;""").toPandas()
-stationDF = stationDF[stationDF['station_id'].apply(lambda x: int(x) in list(stationsOfInterestDF.values.flatten()))]
+silver_arr_DF = spark.sql("""
+                          SELECT *
+                          FROM {}.silverarr_delta
+                          """.format(databaseName))
+
+silver_arr_DF = silver_arr_DF.toPandas()
+
+# COMMAND ----------
+
+display(silver_arr_DF.head())
+
+# COMMAND ----------
+
+silver_dep_DF = spark.sql("""
+                          SELECT *
+                          FROM {}.silverdep_delta
+                          """.format(databaseName))
+
+silver_dep_DF = silver_dep_DF.toPandas()
+
+# COMMAND ----------
+
+display(silver_dep_DF.head())
 
 # COMMAND ----------
 
@@ -63,31 +82,33 @@ client = MlflowClient()
 
 # assemble dataset for forecasting
 fdf = spark.sql('''
-   SELECT
-    a.hour as ds,
-    EXTRACT(year from a.hour) as year,
-    EXTRACT(dayofweek from a.hour) as dayofweek,
-    EXTRACT(hour from a.hour) as hour,
-    CASE WHEN d.date IS NULL THEN 0 ELSE 1 END as is_holiday,
-    COALESCE(c.tot_precip_mm,0) as precip_mm,
-    c.avg_temp_f as temp_f
-  FROM ( -- all rental hours by currently active stations
-    SELECT 
-      y.station_id,
-      x.hour
-    FROM citibike.periods x
-    INNER JOIN citibike.stations_most_active y
-     ON x.hour BETWEEN '{0}' AND '{1}'
-    ) a
-  LEFT OUTER JOIN citibike.rentals b
-    ON a.station_id=b.station_id AND a.hour=b.hour
-  LEFT OUTER JOIN citibike.weather c
-    ON a.hour=c.time
-  LEFT OUTER JOIN citibike.holidays d
-    ON TO_DATE(a.hour)=d.date
-  WHERE a.station_id = '{2}'
-  '''.format(end_date, (datetime.strptime(end_date, '%Y-%m-%d') + timedelta(hours=int(hours_to_forecast))).strftime("%Y-%m-%d %H:%M:%S"), station_id)
+  SELECT *
+  FROM {0}.silverarr_delta
+  WHERE ORIGIN = '{1}'
+  '''.format(databaseName, airport_code)
   )
+
+# '''.format(end_date, (datetime.strptime(end_date, '%Y-%m-%d') + timedelta(hours=int(hours_to_forecast))).strftime("%Y-%m-%d %H:%M:%S"), station_id)
+
+# COMMAND ----------
+
+model_name = "{}-reg-rf-model".format(airport_code)
+
+prod_version = None
+stage_version = None
+# get the respective versions
+for mv in client.search_model_versions(f"name='{model_name}'"):
+  if dict(mv)['current_stage'] == 'Staging':
+    stage_version=dict(mv)['version']
+  elif dict(mv)['current_stage'] == 'Production':
+    prod_version=dict(mv)['version']
+
+if prod_version is not None:
+  # load the training data associated with the production model
+  prod_model = mlflow.sklearn.load_model(f"models:/{model_name}/Production")
+if stage_version is not None:
+  # load the training data associated with the production model
+  stage_model = mlflow.sklearn.load_model(f"models:/{model_name}/Staging")
 
 # COMMAND ----------
 
@@ -120,38 +141,17 @@ fig.show()
 # COMMAND ----------
 
 train_df = spark.sql('''
-   SELECT
-    a.hour as ds,
-    EXTRACT(year from a.hour) as year,
-    EXTRACT(dayofweek from a.hour) as dayofweek,
-    EXTRACT(hour from a.hour) as hour,
-    CASE WHEN d.date IS NULL THEN 0 ELSE 1 END as is_holiday,
-    COALESCE(c.tot_precip_mm,0) as precip_mm,
-    c.avg_temp_f as temp_f
-  FROM ( -- all rental hours by currently active stations
-    SELECT 
-      y.station_id,
-      x.hour
-    FROM citibike.periods x
-    INNER JOIN citibike.stations_most_active y
-     ON x.hour BETWEEN '{0}' AND '{1}'
-    ) a
-  LEFT OUTER JOIN citibike.rentals b
-    ON a.station_id=b.station_id AND a.hour=b.hour
-  LEFT OUTER JOIN citibike.weather c
-    ON a.hour=c.time
-  LEFT OUTER JOIN citibike.holidays d
-    ON TO_DATE(a.hour)=d.date
-  WHERE a.station_id = '{2}'
-  '''.format((datetime.strptime(end_date, '%Y-%m-%d') - timedelta(hours=int(hours_to_forecast))).strftime("%Y-%m-%d %H:%M:%S"), end_date,  station_id)
+  SELECT *
+  FROM {0}.silverarr_delta
+  WHERE ORIGIN = '{1}'
+  '''.format(databaseName, airport_code)
   )
+
+# '''.format((datetime.strptime(end_date, '%Y-%m-%d') - timedelta(hours=int(hours_to_forecast))).strftime("%Y-%m-%d %H:%M:%S"), end_date,  station_id)
 
 # COMMAND ----------
 
-airport = dbutils.widgets.get('00.Airport_Code')
-airport_id = stationDF[stationDF['name']==airport]['station_id'].values[0]
-
-model_name = "{}-reg-rf-model".format(airport_id)
+model_name = "{}-reg-rf-model".format(airport_code)
 
 prod_version = None
 stage_version = None
