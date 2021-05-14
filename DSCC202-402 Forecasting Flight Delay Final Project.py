@@ -105,6 +105,7 @@
 
 from datetime import datetime as dt
 from datetime import timedelta
+import json
 
 dbutils.widgets.removeAll()
 
@@ -113,17 +114,23 @@ dbutils.widgets.text('01.training_start_date', "2018-01-01")
 dbutils.widgets.text('02.training_end_date', "2019-03-15")
 dbutils.widgets.text('03.inference_date', (dt.strptime(str(dbutils.widgets.get('02.training_end_date')), "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d"))
 
+airport_code = str(dbutils.widgets.get('00.Airport_Code'))
 training_start_date = str(dbutils.widgets.get('01.training_start_date'))
 training_end_date = str(dbutils.widgets.get('02.training_end_date'))
 inference_date = str(dbutils.widgets.get('03.inference_date'))
-airport_code = str(dbutils.widgets.get('00.Airport_Code'))
+
 print(airport_code,training_start_date,training_end_date,inference_date)
 
 # COMMAND ----------
 
 # run link to the application notebook
-#status = dbutils.notebook.run(<PATH TO YOUR APPLICATION NOTEBOOK>, 3600, "00.Airport_Code":airport_code,"01.training_start_date":training_start_date,"02.training_end_date":training_end_date,"03.inference_date":inference_date})
-# if status == "Success" print("Passed") else print("Failed")
+status = dbutils.notebook.run("/Users/jordan.pappas@rochester.edu/flight_delay_2/Application Widgets", 3600, {"00.Airport_Code":airport_code,"01.training_start_date":training_start_date,"02.training_end_date":training_end_date,"03.inference_date":inference_date})
+
+#Return Success
+if status == "Success": 
+  print("Passed") 
+else:
+  print("Failed")
 # NOTE NOTEBOOK SHOULD RETURN dbutils.notebook.exit("Success") WHEN IT PASSES
 
 # COMMAND ----------
@@ -138,9 +145,13 @@ print(airport_code,training_start_date,training_end_date,inference_date)
 # COMMAND ----------
 
 # run link to the monitoring notebook
-status = dbutils.notebook.run("/Users/jordan.pappas@rochester.edu/flight_delay/Model Monitoring", 3600, {"00.Airport_Code":airport_code,"01.training_start_date":training_start_date,"02.training_end_date":training_end_date,"03.inference_date":inference_date})
-# Check the results
-assert json.loads(result)["exit_code"] == "Success", "Application and Monitoring Failed!" # Check to see that it worked
+status = dbutils.notebook.run("/Users/jordan.pappas@rochester.edu/flight_delay_2/Model Monitoring", 3600, {"00.Airport_Code":airport_code,"01.training_start_date":training_start_date,"02.training_end_date":training_end_date,"03.inference_date":inference_date})
+
+#Return Success
+if status == "Success": 
+  print("Passed") 
+else:
+  print("Failed")
 # NOTE NOTEBOOK SHOULD RETURN dbutils.notebook.exit("Success") WHEN IT PASSES
 
 # COMMAND ----------
@@ -158,8 +169,13 @@ assert json.loads(result)["exit_code"] == "Success", "Application and Monitoring
 # COMMAND ----------
 
 # run link to the modeling notebook
-#status = dbutils.notebook.run(<PATH TO YOUR ML MODELING NOTEBOOK>, 3600, "00.Airport_Code":airport_code,"01.training_start_date":training_start_date,"02.training_end_date":training_end_date,"03.inference_date":inference_date})
-# if status == "Success" print("Passed") else print("Failed")
+status = dbutils.notebook.run("/Users/jordan.pappas@rochester.edu/flight_delay_2/MLOps", 3600, {"00.Airport_Code":airport_code,"01.training_start_date":training_start_date,"02.training_end_date":training_end_date,"03.inference_date":inference_date})
+
+#Return Success
+if status == "Success": 
+  print("Passed") 
+else:
+  print("Failed")
 # NOTE NOTEBOOK SHOULD RETURN dbutils.notebook.exit("Success") WHEN IT PASSES
 
 # COMMAND ----------
@@ -177,8 +193,13 @@ assert json.loads(result)["exit_code"] == "Success", "Application and Monitoring
 # COMMAND ----------
 
 # run link to the modeling notebook
-#status = dbutils.notebook.run(<PATH TO YOUR ETL NOTEBOOK>, 3600, "00.Airport_Code":airport_code,"01.training_start_date":training_start_date,"02.training_end_date":training_end_date,"03.inference_date":inference_date})
-# if status == "Success" print("Passed") else print("Failed")
+status = dbutils.notebook.run("/Users/jordan.pappas@rochester.edu/flight_delay_2/ETL", 3600)
+
+#Return Success
+if status == "Success": 
+  print("Passed") 
+else:
+  print("Failed")
 # NOTE NOTEBOOK SHOULD RETURN dbutils.notebook.exit("Success") WHEN IT PASSES
 
 # COMMAND ----------
@@ -192,6 +213,11 @@ assert json.loads(result)["exit_code"] == "Success", "Application and Monitoring
 # COMMAND ----------
 
 # run link to the EDA notebook
-# status = dbutils.notebook.run(<PATH TO YOUR EDA NOTEBOOK>, 3600, "00.Airport_Code":airport_code,"01.training_start_date":training_start_date,"02.training_end_date":training_end_date,"03.inference_date":inference_date})
-# if status == "Success" print("Passed") else print("Failed")
+status = dbutils.notebook.run("/Users/jordan.pappas@rochester.edu/flight_delay_2/EDA", 3600, {"00.Airport_Code":airport_code,"01.training_start_date":training_start_date,"02.training_end_date":training_end_date,"03.inference_date":inference_date})
+
+#Return Success
+if status == "Success": 
+  print("Passed") 
+else:
+  print("Failed") 
 # NOTE NOTEBOOK SHOULD RETURN dbutils.notebook.exit("Success") WHEN IT PASSES
