@@ -435,3 +435,7 @@ g05_Dep_LinearModel_details = mlflow.register_model(model_uri=g05_Dep_LinearMode
 
 # COMMAND ----------
 
+import json
+
+# Return Success
+dbutils.notebook.exit(json.dumps({"exit_code": "Success"}))
