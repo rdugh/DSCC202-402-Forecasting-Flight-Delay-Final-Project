@@ -12,34 +12,6 @@
 
 # COMMAND ----------
 
-databaseName = GROUP_DBNAME
-
-silver_arr_DF = spark.sql("""
-                          SELECT *
-                          FROM {}.silverarr_delta
-                          """.format(databaseName))
-
-silver_arr_DF = silver_arr_DF.toPandas()
-
-# COMMAND ----------
-
-display(silver_arr_DF.head())
-
-# COMMAND ----------
-
-silver_dep_DF = spark.sql("""
-                          SELECT *
-                          FROM {}.silverdep_delta
-                          """.format(databaseName))
-
-silver_dep_DF = silver_dep_DF.toPandas()
-
-# COMMAND ----------
-
-display(silver_dep_DF.head())
-
-# COMMAND ----------
-
 from datetime import datetime as dt
 from datetime import timedelta
 
@@ -64,8 +36,48 @@ print(airport_code,training_start_date,training_end_date,inference_date,promote_
 
 # COMMAND ----------
 
+def abbrToID(data):
+  """
+  This function is designed to convert abbreviations to their airportID. For use with non-SparkDF datatypes.
+  
+  Input:  A  String, representing the airport Code
+  Output: an Integer, representing the airportID
+  """
+  if data == "ATL":
+    data = 10397
+  elif data == "BOS":
+    data = 10721
+  elif data == "CLT":
+    data =  11057
+  elif data == "ORD":
+    data =  13930
+  elif data == "CVG":
+    data =  11193
+  elif data == "DFW":
+    data =  11298
+  elif data == "DEN":
+    data =  11292
+  elif data == "IAH":
+    data =  12266
+  elif data == "LAX":
+    data =  12892
+  elif data == "JFK":
+    data =  12478
+  elif data == "SFO":
+    data =  14771
+  elif data == "SEA":
+    data =  14747
+  elif data == "DCA":
+    data =  11278
+  else:
+    data = 99999
+  
+  return(data)
+
+# COMMAND ----------
+
 # MAGIC %md
-# MAGIC ## Forecast departure flight delay at selected airport
+# MAGIC ## Forecast flight delay at selected airport
 
 # COMMAND ----------
 
@@ -74,109 +86,193 @@ from pprint import pprint
 from mlflow.tracking import MlflowClient
 import plotly.express as px
 from datetime import timedelta, datetime
+import numpy as np
+import pandas as pd
 
 client = MlflowClient()
 
 # COMMAND ----------
 
-# assemble dataset for forecasting
-fdf = spark.sql('''
-  SELECT *
-  FROM {0}.silverarr_delta
-  WHERE ORIGIN = '{1}'
-  '''.format(databaseName, airport_code)
-  )
+# Select whether you would like to monitor arrival or depature models using "arr" or "dep":
+model_type = "arr"
 
-# '''.format(end_date, (datetime.strptime(end_date, '%Y-%m-%d') + timedelta(hours=int(hours_to_forecast))).strftime("%Y-%m-%d %H:%M:%S"), station_id)
+# Select model names for staging and production:
+  # group05_arr_sig_newfeatures
+  # group05_dep_sig_newfeatures
+  # g05_Arr_LinearModel
+  # g05_Dep_LinearModel
+model_name_staging = "group05_arr_sig_newfeatures"
+model_name_production = "g05_Arr_LinearModel"
 
 # COMMAND ----------
 
-model_name = "{}-reg-rf-model".format(airport_code)
+mlflow.set_experiment('/Users/rdugh@UR.Rochester.edu/flight_delay/dscc202_group05_experiment')
+
+# COMMAND ----------
 
 stage_version = None
-prod_version = None
+
 # get the respective versions
-for mv in client.search_model_versions(f"name='{model_name}'"):
+for mv in client.search_model_versions(f"name='{model_name_staging}'"):
   if dict(mv)['current_stage'] == 'Staging':
     stage_version=dict(mv)['version']
-  elif dict(mv)['current_stage'] == 'Production':
-    prod_version=dict(mv)['version']
 
 if stage_version is not None:
-  stage_model = mlflow.sklearn.load_model(f"models:/{model_name}/Staging")
+  stage_model = mlflow.pyfunc.load_model(f"models:/{model_name_staging}/Staging")
+  print("Staging Model: ", stage_model)
+
+# COMMAND ----------
+
+prod_version = None
+
+# get the respective versions
+for mv in client.search_model_versions(f"name='{model_name_production}'"):
+  if dict(mv)['current_stage'] == 'Production':
+    prod_version=dict(mv)['version']
+
 if prod_version is not None:
-  prod_model = mlflow.sklearn.load_model(f"models:/{model_name}/Production")
+  prod_model = mlflow.pyfunc.load_model(f"models:/{model_name_production}/Production")
+  print("Production Model: ", prod_model)
+
+# COMMAND ----------
+
+# assemble dataset for forecasting
+
+databaseName = GROUP_DBNAME
+airport_id = abbrToID(airport_code)
+
+fdf = spark.sql('''
+  SELECT *
+  FROM {0}.silver{1}_delta
+  WHERE ORIGIN_AIRPORT_ID = {2} 
+  AND
+  FL_DATE BETWEEN '{3}' AND '{4}'
+  '''.format(databaseName, model_type, airport_id, training_end_date, inference_date)
+  )
 
 # COMMAND ----------
 
 # Forecast using the production and staging models
 
-df2=fdf.toPandas().fillna(method='ffill').fillna(method='bfill')
-df2['model']='Staging'
-df2['yhat']=stage_model.predict(df2.drop(["ds","model"], axis=1).values)
+df_forecast_staging = fdf.toPandas().fillna(method='ffill').fillna(method='bfill')
+df_forecast_staging['model'] = 'Staging'
 
-df1=fdf.toPandas().fillna(method='ffill').fillna(method='bfill')
-df1['model']='Production'
-df1['yhat']=prod_model.predict(df1.drop(["ds","model"], axis=1).values)
+if model_type == "arr":
+  df_forecast_staging['yhat'] = stage_model.predict(pd.DataFrame(df_forecast_staging.drop(["model","FL_DATE","ARR_DELAY"], axis=1).values, columns=['ORIGIN_AIRPORT_ID', 'DEST_AIRPORT_ID', 'DEP_DELAY', 'DAY_OF_WEEK', 'MONTH', 'YEAR', 'hour', 'QUARTER', 'DAY_OF_MONTH', 'avg_temp_f', 'tot_precip_mm', 'avg_wnd_mps', 'avg_vis_m', 'avg_slp_hpa', 'avg_dewpt_f'], dtype=np.int32))
+if model_type == "dep":
+  df_forecast_staging['yhat'] = stage_model.predict(pd.DataFrame(df_forecast_staging.drop(["model","FL_DATE","DEP_DELAY"], axis=1).values, columns=['ORIGIN_AIRPORT_ID', 'DEST_AIRPORT_ID', 'ARR_DELAY', 'DAY_OF_WEEK', 'MONTH', 'YEAR', 'hour', 'QUARTER', 'DAY_OF_MONTH', 'avg_temp_f', 'tot_precip_mm', 'avg_wnd_mps', 'avg_vis_m', 'avg_slp_hpa', 'avg_dewpt_f'], dtype=np.int32))
+
+df_forecast_production = fdf.toPandas().fillna(method='ffill').fillna(method='bfill')
+df_forecast_production['model'] = 'Production'
+
+if model_type == "arr":
+  df_forecast_production['yhat'] = prod_model.predict(pd.DataFrame(df_forecast_production.drop(["model","FL_DATE","ARR_DELAY"], axis=1).values, columns=['ORIGIN_AIRPORT_ID', 'DEST_AIRPORT_ID', 'DEP_DELAY', 'DAY_OF_WEEK', 'MONTH', 'YEAR', 'hour', 'QUARTER', 'DAY_OF_MONTH','avg_temp_f', 'tot_precip_mm', 'avg_wnd_mps', 'avg_vis_m', 'avg_slp_hpa', 'avg_dewpt_f'], dtype=np.int32))
+if model_type == "dep":
+  df_forecast_production['yhat'] = prod_model.predict(pd.DataFrame(df_forecast_production.drop(["model","FL_DATE","DEP_DELAY"], axis=1).values, columns=['ORIGIN_AIRPORT_ID', 'DEST_AIRPORT_ID', 'ARR_DELAY', 'DAY_OF_WEEK', 'MONTH', 'YEAR', 'hour', 'QUARTER', 'DAY_OF_MONTH','avg_temp_f', 'tot_precip_mm', 'avg_wnd_mps', 'avg_vis_m', 'avg_slp_hpa', 'avg_dewpt_f'], dtype=np.int32))
 
 # COMMAND ----------
 
-df = pd.concat([df1,df2]).reset_index()
+df = pd.concat([df_forecast_staging,df_forecast_production]).reset_index()
+df = df.sort_values(['hour'])
+
 labels={
-   "ds": "Forecast Time",
+   "hour": "Forecast Time",
    "yhat": "Forecasted Delay",
    "model": "Model Stage"
-}
-fig = px.line(df, x="ds", y="yhat", color='model', title=f"{airport_code} delay forecast by model stage", labels=labels)
+   }
+
+fig = px.line(df, x="hour", y="yhat", color='model', title=f"{airport_code} Delay Forecast by Model Stage", labels=labels)
 fig.show()
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Monitoring the model performance
+# MAGIC ## Monitoring the model performance in training period
 
 # COMMAND ----------
-
-train_df = spark.sql('''
-  SELECT *
-  FROM {0}.silverarr_delta
-  WHERE ORIGIN = '{1}'
-  '''.format(databaseName, airport_code)
-  )
-
-# '''.format((datetime.strptime(end_date, '%Y-%m-%d') - timedelta(hours=int(hours_to_forecast))).strftime("%Y-%m-%d %H:%M:%S"), end_date,  station_id)
-
-# COMMAND ----------
-
-model_name = "{}-reg-rf-model".format(airport_code)
 
 stage_version = None
-prod_version = None
+
 # get the respective versions
-for mv in client.search_model_versions(f"name='{model_name}'"):
+for mv in client.search_model_versions(f"name='{model_name_staging}'"):
   if dict(mv)['current_stage'] == 'Staging':
     stage_version=dict(mv)['version']
-  elif dict(mv)['current_stage'] == 'Production':
-    prod_version=dict(mv)['version']
 
 if stage_version is not None:
   # load the training data assocaited with the staging model
-  stage_model = mlflow.sklearn.load_model(f"models:/{model_name}/Staging")
-  sdf = spark.sql(f"""SELECT * from citibike.forecast_regression_timeweather WHERE station_id = '{station_id}' and model_version = '{stage_version}';""").toPandas()
-if prod_version is not None:
-  # load the training data associated with the production model
-  prod_model = mlflow.sklearn.load_model(f"models:/{model_name}/Production")
-  pdf = spark.sql(f"""SELECT * from citibike.forecast_regression_timeweather WHERE station_id = '{station_id}' and model_version = '{prod_version}';""").toPandas()
+  stage_model = mlflow.pyfunc.load_model(f"models:/{model_name_staging}/Staging")
+  print("Production Model: ", stage_model)
+  sdf = spark.sql(f"""SELECT * FROM {databaseName}.silver{model_type}_delta WHERE ORIGIN_AIRPORT_ID = {airport_id} AND
+  FL_DATE BETWEEN '{training_start_date}' AND '{training_end_date}';""").toPandas()
 
 # COMMAND ----------
 
-pdf['stage']="prod"
-pdf['residual']=pdf['y']-pdf['yhat']
+prod_version = None
+
+# get the respective versions
+for mv in client.search_model_versions(f"name='{model_name_production}'"):
+  if dict(mv)['current_stage'] == 'Production':
+    prod_version=dict(mv)['version']
+
+if prod_version is not None:
+  # load the training data associated with the production model
+  prod_model = mlflow.pyfunc.load_model(f"models:/{model_name_production}/Production")
+  print("Production Model: ", prod_model)
+  pdf = spark.sql(f"""SELECT * FROM {databaseName}.silver{model_type}_delta WHERE ORIGIN_AIRPORT_ID = {airport_id} AND
+  FL_DATE BETWEEN '{training_start_date}' AND '{training_end_date}';""").toPandas()
+
+# COMMAND ----------
+
+# assemble dataset for training
+
+airport_id = abbrToID(airport_code)
+
+train_df = spark.sql('''
+  SELECT *
+  FROM {0}.silver{1}_delta
+  WHERE ORIGIN_AIRPORT_ID = {2} 
+  AND
+  FL_DATE BETWEEN '{3}' AND '{4}'
+  '''.format(databaseName, model_type, airport_id, training_start_date, training_end_date)
+  )
+
+# COMMAND ----------
+
+# Train using the production and staging models
+
+df_training_staging = train_df.toPandas().fillna(method='ffill').fillna(method='bfill')
+df_training_staging['model'] = 'Staging'
+
+if model_type == "arr":
+  df_training_staging['yhat'] = stage_model.predict(pd.DataFrame(df_training_staging.drop(["model","FL_DATE","ARR_DELAY"], axis=1).values, columns=['ORIGIN_AIRPORT_ID', 'DEST_AIRPORT_ID', 'DEP_DELAY', 'DAY_OF_WEEK', 'MONTH', 'YEAR', 'hour', 'QUARTER', 'DAY_OF_MONTH', 'avg_temp_f', 'tot_precip_mm', 'avg_wnd_mps', 'avg_vis_m', 'avg_slp_hpa', 'avg_dewpt_f'], dtype=np.int32))
+if model_type == "dep":
+  df_training_staging['yhat'] = stage_model.predict(pd.DataFrame(df_training_staging.drop(["model","FL_DATE","DEP_DELAY"], axis=1).values, columns=['ORIGIN_AIRPORT_ID', 'DEST_AIRPORT_ID', 'ARR_DELAY', 'DAY_OF_WEEK', 'MONTH', 'YEAR', 'hour', 'QUARTER', 'DAY_OF_MONTH', 'avg_temp_f', 'tot_precip_mm', 'avg_wnd_mps', 'avg_vis_m', 'avg_slp_hpa', 'avg_dewpt_f'], dtype=np.int32))
+
+df_training_production = train_df.toPandas().fillna(method='ffill').fillna(method='bfill')
+df_training_production['model'] = 'Production'
+
+if model_type == "arr":
+  df_training_production['yhat'] = prod_model.predict(pd.DataFrame(df_training_production.drop(["model","FL_DATE","ARR_DELAY"], axis=1).values, columns=['ORIGIN_AIRPORT_ID', 'DEST_AIRPORT_ID', 'DEP_DELAY', 'DAY_OF_WEEK', 'MONTH', 'YEAR', 'hour', 'QUARTER', 'DAY_OF_MONTH','avg_temp_f', 'tot_precip_mm', 'avg_wnd_mps', 'avg_vis_m', 'avg_slp_hpa', 'avg_dewpt_f'], dtype=np.int32))
+if model_type == "dep":
+  df_training_production['yhat'] = prod_model.predict(pd.DataFrame(df_training_production.drop(["model","FL_DATE","DEP_DELAY"], axis=1).values, columns=['ORIGIN_AIRPORT_ID', 'DEST_AIRPORT_ID', 'ARR_DELAY', 'DAY_OF_WEEK', 'MONTH', 'YEAR', 'hour', 'QUARTER', 'DAY_OF_MONTH','avg_temp_f', 'tot_precip_mm', 'avg_wnd_mps', 'avg_vis_m', 'avg_slp_hpa', 'avg_dewpt_f'], dtype=np.int32))
+
+# COMMAND ----------
 
 sdf['stage']="staging"
-sdf['residual']=sdf['y']-sdf['yhat']
+if model_type == "arr":
+  sdf['residual']=sdf['ARR_DELAY']-df_training_staging['yhat']
+if model_type == "dep":
+  sdf['residual']=sdf['DEP_DELAY']-df_training_staging['yhat']
+sdf['yhat']=df_training_staging['yhat']
 
-df=pd.concat([pdf,sdf])
+pdf['stage']="prod"
+if model_type == "arr":
+  pdf['residual']=pdf['ARR_DELAY']-df_training_production['yhat']
+if model_type == "dep":
+  pdf['residual']=pdf['DEP_DELAY']-df_training_production['yhat']
+pdf['yhat']=df_training_production['yhat']
+
+df=pd.concat([sdf,pdf])
 
 # COMMAND ----------
 
@@ -184,26 +280,9 @@ fig = px.scatter(
     df, x='yhat', y='residual',
     marginal_y='violin',
     color='stage', trendline='ols',
-    title=f"{airport} delay forecast model performance comparison"
+    title=f"{airport_code} Delay Forecast Model Performance Comparison for Training Period"
 )
 fig.show()
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Forecast arrival flight delay at selected airport
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
 
 # COMMAND ----------
 
@@ -241,21 +320,25 @@ tfdv.display_anomalies(anomalies)
 # COMMAND ----------
 
 # Add skew and drift comparators
-temp_f = tfdv.get_feature(schema, 'temp_f')
+temp_f = tfdv.get_feature(schema, 'avg_temp_f')
 temp_f.skew_comparator.jensen_shannon_divergence.threshold = 0
 temp_f.drift_comparator.jensen_shannon_divergence.threshold = 0
 
-precip_mm = tfdv.get_feature(schema, 'precip_mm')
+precip_mm = tfdv.get_feature(schema, 'tot_precip_mm')
 precip_mm.skew_comparator.jensen_shannon_divergence.threshold = 0
 precip_mm.drift_comparator.jensen_shannon_divergence.threshold = 0
 
 _anomalies = tfdv.validate_statistics(stats_train, schema, serving_statistics=stats_serve)
 
+tfdv.display_anomalies(_anomalies)
+
+# COMMAND ----------
+
 hour = tfdv.get_feature(schema, 'hour')
 hour.skew_comparator.jensen_shannon_divergence.threshold = 0
 hour.drift_comparator.jensen_shannon_divergence.threshold = 0
 
-dayofweek = tfdv.get_feature(schema, 'dayofweek')
+dayofweek = tfdv.get_feature(schema, 'DAY_OF_WEEK')
 dayofweek.skew_comparator.jensen_shannon_divergence.threshold = 0
 dayofweek.drift_comparator.jensen_shannon_divergence.threshold = 0
 
@@ -267,6 +350,15 @@ tfdv.display_anomalies(_anomalies)
 
 # MAGIC %md
 # MAGIC ## Promote model if selected
+
+# COMMAND ----------
+
+# Criteria for retraining and promotion to production:
+  # 1.) View the "Delay Forecast Model Performance Comparison for Training Period" graph
+  # 2.) Analyze the graph to determine which model stage has a higher density of residuals around the horizontal line at residual=0. Note: The residuals are the difference between model predicted values and ground truth values.
+  # 3a.) If the staging model observes a higher density of residuals around the horizontal line at residual=0 than the production model, then promote the current staging model to production and archive the old production model.
+  # OR
+  # 3b.) If the staging model does NOT observe a higher density of residuals around horizontal line at residual=0 than the production model, then retrain staging model and repeat the above process.
 
 # COMMAND ----------
 
@@ -291,5 +383,4 @@ if promote_model and stage_version is not None and prod_version is not None:
 
 import json
 
-# Return Success
-dbutils.notebook.exit(json.dumps({"exit_code": "Success"}))
+dbutils.notebook.exit("Success")
